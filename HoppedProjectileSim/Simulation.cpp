@@ -2,6 +2,7 @@
 #include <math.h>
 #include "Simulation.h"
 #include "BasicMat.h"
+#include "PhysicsArgs.h"
 
 
 using namespace std;
@@ -19,13 +20,34 @@ namespace hps
 
 
 
+	DLL_API bool RunSimulation(float distbetweensamples, bool applyphysics, float3 camPosOffset, float3 camRotOffset, 
+		PhysicsArgs physicsArgs, float3 gravityVector, CollisionDetectionFunc collisionDetectionFunc, 
+		float& collisiondepth, float& totaltime, float3** linePoints, int& linePointsCount, Stats& stats)
+	{
+		std::vector<float3> linePointsVec;
+
+		bool result = Simulation::Simulate(distbetweensamples, applyphysics, camPosOffset, camRotOffset,
+			physicsArgs, gravityVector, collisionDetectionFunc, collisiondepth, totaltime, linePointsVec, stats);
+
+		//Update linePointsCount with the actual number of points.
+		linePointsCount = static_cast<int>(linePointsVec.size());
+
+		//Allocate memory for linePoints on the C++ side.
+		*linePoints = new float3[linePointsVec.size()];
+
+		//Copy data to the allocated array.
+		std::copy(linePointsVec.begin(), linePointsVec.end(), *linePoints);
+
+		return result;
+	}
+
 	//bool Simulation::Simulate(sl::Mat depthmat, float startspeedmps, float distbetweensamples, bool applyphysics, sl::SensorsData sensordata,
 	//	int2& collisionpoint, float& collisiondepth, float& totaltime, bool drawline, cv::Mat& drawlinetomat, cv::Scalar linecolor)
-	bool Simulation::Simulate(float startspeedmps, float distbetweensamples, bool applyphysics, float3 camPosOffset, float3 camRotOffset,
-		float spinrpm, float bbDiameterMM, float bbMassGrams, float tempcelsius, float relhumidity01, float pressureHPa,
-		float bbToAirFrictionCoef, float3 gravityVector, CollisionDetectionFunc collisionDetectionFunc,
+	bool Simulation::Simulate(float distbetweensamples, bool applyphysics, float3 camPosOffset, float3 camRotOffset,
+		PhysicsArgs physicsArgs, float3 gravityVector, CollisionDetectionFunc collisionDetectionFunc,
 		float& collisiondepth, float& totaltime, vector<float3>& linePoints, Stats& stats)
 	{
+
 		float downspeed = 0;
 		totaltime = 0;
 
@@ -59,37 +81,29 @@ namespace hps
 		gunupnormal.y = vectorup.x * sin(zanglerad) + vectorup.y * cos(zanglerad);
 
 
-		//Temporarily, the inverse of gun up normal will be used for the gravity angle, until the ZED2 arrives and we have an IMU. 
-		//sl::float3 gravitynormal(-gunupnormal.x, -gunupnormal.y, -gunupnormal.z);
-		//Edit: I GOT MY ZED 2 MOFOS TIME FOR SUM REEL GUD FIZIKZ.
-		//sl::float3 gravitynormal = CamUtilities::IMUPoseToGravityVector(sensordata.imu.pose);
-
-		//For drawing. 
-		int2 lastscreenpos;
-		bool drawthistime = false; //If we're drawing a line, we'll use this to alternate when we're drawing and not.
-
-
 		//Downward acceleration to add each sample due to gravity.
-		float timebetweendots = distbetweensamples / startspeedmps; //How long does it take for the projectile to travel between two dots? Currently assuming forward speed doesn't change.
+		float timebetweendots = distbetweensamples / physicsArgs.StartSpeedMPS; //How long does it take for the projectile to travel between two dots? Currently assuming forward speed doesn't change.
 
-		float3 velocity = finalrotnormal * startspeedmps; //Startingvelocity
+		float3 velocity = finalrotnormal * physicsArgs.StartSpeedMPS; //Startingvelocity
 		//float downspeedaddpersample = GRAVITY_ACCEL * timebetweendots * timebetweendots; //GRAVITY_ACCEL * timebetweendots is downward accel added per dot but STILL IN MPS. Multiply again to get how much it should change. 
+
+		float currentSpinRPM = physicsArgs.SpinRPM;
 
 		//Upward acceleration to add each sample due to hop-up. 
 		//TODO: Eventually take into effect rotational drag. 
-		float hopupaddpersample = spinrpm * timebetweendots * timebetweendots; //Same concept as gravity. 
+		float hopupaddpersample = currentSpinRPM * timebetweendots * timebetweendots; //Same concept as gravity. 
 
 		//cout << "Start. tbd: " <<  timebetweendots << ", dsaps: " << downspeedaddpersample << ", vel: " << velocityps << ", frn: " << finalrotnormal << ", gravnormal: " << gravitynormal <<  endl;
 
 		//Numbers needed for drag and hop-up/Magnus that don't change sample to sample. 
 		//TODO: Don't calculate if not using physics - and also don't update stats. 
-		float bbdiameterm = bbDiameterMM / 1000;
+		float bbdiameterm = physicsArgs.BBDiameterMM / 1000;
 		//float crosssectionalarea = PI * pow(Config::bbDiameterMM() / 1000 * 0.5, 2);
 		float crosssectionalarea = PI * pow(bbdiameterm * 0.5, 2);
-		float airdensity = Simulation::CalculateAirDensity(pressureHPa, tempcelsius, relhumidity01); //Temp values - one atmosphere, 50°C, no humidity.
+		float airdensity = Simulation::CalculateAirDensity(physicsArgs.PressureHPa, physicsArgs.TemperatureCelsius, physicsArgs.RelativeHumidity01); //Temp values - one atmosphere, 50°C, no humidity.
 		//float airdensity = 122.5; //Temp. In hectapascals. 
-		float airviscosity = Simulation::CalculateAirViscosity(tempcelsius);
-		float bbmasskg = bbMassGrams / 1000.0;
+		float airviscosity = Simulation::CalculateAirViscosity(physicsArgs.TemperatureCelsius);
+		float bbmasskg = physicsArgs.BBMassGrams / 1000.0;
 		float momentofinertia = Simulation::CalculateMomentOfInertia(bbmasskg, bbdiameterm);
 
 		//DEBUG
@@ -103,14 +117,11 @@ namespace hps
 		//cout << "New Angle: " << rotangle.x << ", " << rotangle.y << ", " << rotangle.z << endl;
 
 		//Update stats with air values, which won't change between samples. 
-		stats.AirPressureHPa = pressureHPa;
+		stats.AirPressureHPa = physicsArgs.PressureHPa;
 		stats.AirDensityKGM3 = airdensity;
 		stats.AirViscosityPaS = airviscosity;
 
-		//bool isfirstsample = true;
-
 		int samplecount = 0; //Mostly for debug but also used here and there. 
-		//cout << "Start RPM = " << spinrpm << endl;
 		while (currentpoint.z < MAX_DISTANCE) //Sliiiightly concerned this will be infinite. 
 		{
 			//Catch potential infinite loop. 
@@ -131,7 +142,6 @@ namespace hps
 			float liftcoefficient = 0;
 			float liftforcenewtons = 0;
 
-
 			if (applyphysics)
 			{
 				float3 velocitynorm = velocity / speed;
@@ -141,18 +151,16 @@ namespace hps
 
 				//Drag. 
 				//float dragcoefficient = CalculateDragCoefficient(spinrpm, speed / timebetweendots, bbdiameterm, airdensity, airviscosity); //Using per-sample speed. 
-				dragcoefficient = Simulation::CalculateDragCoefficient(spinrpm, speed, bbdiameterm, airdensity, airviscosity);
+				dragcoefficient = Simulation::CalculateDragCoefficient(currentSpinRPM, speed, bbdiameterm, airdensity, airviscosity);
 				dragforcenewtons = Simulation::CalculateDragForce(dragcoefficient, airdensity, crosssectionalarea, speed);
 				//cout <<"Air Density: " << airdensity <<  " Newtons: " << dragforcenewtons << endl;
 
 				float dragspeedchange = dragforcenewtons * sampletime / bbmasskg;
 
-				//velocityps -= velocityps / speedps * speedchange * timebetweendots;
 				velocity -= velocitynorm * dragspeedchange;
 
-
 				//Hop-up/Magnus.
-				if (spinrpm != 0) //If it's not spinning, don't spend the cycles doing all this. 
+				if (currentSpinRPM != 0) //If it's not spinning, don't spend the cycles doing all this. 
 				{
 					//Calculate hop-up normal. It's orthogonal to the velocity. 
 					//We get that by rotating around the cross product of the gun up normal and velocity by 90 degrees. 
@@ -164,7 +172,7 @@ namespace hps
 
 					float3 hopupnormal = Simulation::RotateVectorAroundAxis(velocitynorm, hopupcross, 90);
 
-					liftcoefficient = Simulation::CalculateLiftCoefficient(spinrpm, speed, bbdiameterm); //If change to speed works, apply to drag. 
+					liftcoefficient = Simulation::CalculateLiftCoefficient(currentSpinRPM, speed, bbdiameterm); //If change to speed works, apply to drag. 
 					liftforcenewtons = Simulation::CalculateLiftForce(liftcoefficient, airdensity, crosssectionalarea, speed); //Force across a second. 
 					//That force is how much force will occur over a second. 
 					float liftspeedchange = liftforcenewtons * sampletime / bbmasskg; //Speed change. 
@@ -176,7 +184,7 @@ namespace hps
 					//Temporarily while I can't experiment at all (need equipment and lack of the plague) I'm using a 
 					//straight percentage reduction of the spin as a percentage per second. 
 
-					spinrpm -= spinrpm * bbToAirFrictionCoef * sampletime;
+					currentSpinRPM -= currentSpinRPM * physicsArgs.BBToAirFrictionCoefficient * sampletime;
 
 					/*
 					float spindragtorque = CalculateSpinDragTorque(airdensity, airviscosity, bbdiameterm, spinrpm, bbToAirFrictionCoef);
@@ -197,7 +205,7 @@ namespace hps
 					*/
 
 
-					if (spinrpm < 0) spinrpm = 0;
+					if (currentSpinRPM < 0) currentSpinRPM = 0;
 
 
 				}
@@ -238,7 +246,7 @@ namespace hps
 
 			int2 screenpos = CamUtilities::CameraToScreenPos(currentpoint, projectionMatrix, swidth, sheight);
 
-			//If it's outside view of the screen, we won't be able to calculate depth. 
+			//If it's outside view of the screen, we won't be able to calculate depth.
 			if (screenpos.x < 0.0 || screenpos.y < 0.0 || screenpos.x > swidth || screenpos.y > sheight)
 			{
 				continue;
@@ -247,7 +255,7 @@ namespace hps
 			float zeddepth;
 			depthmat.getValue(screenpos.x, screenpos.y, &zeddepth);
 
-			bool hit = zeddepth > 0.0 && pointdepth > zeddepth; //ZED actually reports positive depth. Who woulda thinkitt? 
+			bool hit = zeddepth > 0.0 && pointdepth > zeddepth; //ZED actually reports positive depth. Who woulda thinkitt?
 
 			*/
 			if (hit)
@@ -404,13 +412,13 @@ namespace hps
 	/*
 	float3 Simulation::RotateVectorAroundAxis(float3 srcvec, float3 axis, float angledegrees)
 	{
-		//Convert to radians. 
+		//Convert to radians.
 		float anglerad = angledegrees * PI / 180;
 
 		float sinang = sin(anglerad); //Shorthand.
-		float cosang = cos(anglerad); //Shorthand. 
+		float cosang = cos(anglerad); //Shorthand.
 
-		//Build the rotation matrix that does the job. 
+		//Build the rotation matrix that does the job.
 		//Referencing: https://en.wikipedia.org/wiki/Rotation_matrix#Rotation_matrix_from_axis_and_angle
 		cv::Mat rotmatrix = cv::Mat(3, 3, CV_32FC1);
 
@@ -426,7 +434,7 @@ namespace hps
 		rotmatrix.at<float>(2, 1) = axis.z * axis.y * (1 - cosang) + axis.x * sinang;
 		rotmatrix.at<float>(2, 2) = cosang + pow(axis.z, 2) * (1 - cosang);
 
-		//Multiply. 
+		//Multiply.
 		cv::Mat srcvecmat = cv::Mat(3, 1, CV_32FC1);
 		srcvecmat.at<float>(0) = srcvec.x;
 		srcvecmat.at<float>(1) = srcvec.y;
@@ -536,5 +544,7 @@ namespace hps
 		//float dragtorque = 0.5 * torquecoef * airviscosity * pow(bbradius, 3) * pow(angvelocityradpersec, 2);
 		return dragtorque;
 	}
+
+
 
 }

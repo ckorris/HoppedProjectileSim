@@ -1,6 +1,7 @@
 #pragma once
 #include "MathStructs.h"
 #include "Stats.h"
+#include "PhysicsArgs.h"
 #include <vector>
 #include <functional>
 
@@ -9,11 +10,19 @@ namespace hps
 {
 	using namespace std;
 
+#ifdef BUILD_DLL
+#define DLL_API __declspec(dllexport)
+#else
+#define DLL_API __declspec(dllimport)
+#endif
+
 	extern "C" {
-		__declspec(dllimport) bool Simulate(float startspeedmps, float distbetweensamples, bool applyphysics, float3 camPosOffset, float3 camRotOffset,
-			float spinrpm, float bbDiameterMM, float bbMassGrams, float tempcelsius, float relhumidity01, float pressureHPa,
-			float3 gravityVector, int2& collisionpoint, float& collisiondepth, float& totaltime, std::vector<float3>& linePoints,
-			std::function<bool(const float3&, const float3&)> collisionFunc);
+
+		typedef bool(__cdecl* CollisionDetectionFunc)(const float3&, const float3&);
+
+		DLL_API bool RunSimulation(float distbetweensamples, bool applyphysics, float3 camPosOffset, float3 camRotOffset,
+			PhysicsArgs physicsArgs, float3 gravityVector, CollisionDetectionFunc collisionDetectionFunc,
+			float& collisiondepth, float& totaltime, float3** linePoints, int& linePointsCount, Stats& stats);
 	}
 
 	class Simulation
@@ -22,12 +31,8 @@ namespace hps
 
 		using CollisionDetectionFunc = std::function<bool(const float3&, const float3&)>;
 
-		//static bool Simulate(sl::Mat depthmat, float speedmps, float distbetweensamples, bool applyphysics, sl::SensorsData sensordata,
-		//	int2& collisionpoint, float& collisiondepth, float& totaltime, bool drawline, cv::Mat& drawlinetomat, cv::Scalar linecolor);
-
-		static bool Simulate(float startspeedmps, float distbetweensamples, bool applyphysics, float3 camPosOffset, float3 camRotOffset,
-			float spinrpm, float bbDiameterMM, float bbMassGrams, float tempcelsius, float relhumidity01, float pressureHPa,
-			float bbToAirFrictionCoef, float3 gravityVector, CollisionDetectionFunc collisionDetectionFunc,
+		static bool Simulate(float distbetweensamples, bool applyphysics, float3 camPosOffset, float3 camRotOffset,
+			PhysicsArgs physicsArgs, float3 gravityVector, CollisionDetectionFunc collisionDetectionFunc,
 			float& collisiondepth, float& totaltime, vector<float3>& linePoints, Stats& stats);
 
 		static float CalculateAirDensity(float totalairpressurehpa, float tempcelsius, float relhumidity01);
