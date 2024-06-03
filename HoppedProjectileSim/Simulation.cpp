@@ -11,7 +11,7 @@ namespace hps
 {
 
 	const float GRAVITY_ACCEL = 9.006;
-	const float MAX_DISTANCE = 40.0;
+	const float MAX_DISTANCE = 60.0;
 
 	const float GAS_CONSTANT_DRY_AIR = 287.058; //J / (kg*K).
 	const float GAS_CONSTANT_WATER_VAPOR = 461.495; //J / (kg*K).
@@ -20,13 +20,13 @@ namespace hps
 
 
 
-	DLL_API bool RunSimulation(float distbetweensamples, bool applyphysics, float3 camPosOffset, float3 camRotOffset, 
-		PhysicsArgs physicsArgs, float3 gravityVector, CollisionDetectionFunc collisionDetectionFunc, 
+	DLL_API bool RunSimulation(float distbetweensamples, int maxSamples, float3 camPosOffset, float3 camRotOffset,
+		PhysicsArgs physicsArgs, float3 gravityVector, CollisionDetectionFunc collisionDetectionFunc,
 		float& collisiondepth, float& totaltime, float3** linePoints, int& linePointsCount, Stats& stats)
 	{
 		std::vector<float3> linePointsVec;
 
-		bool result = Simulation::Simulate(distbetweensamples, applyphysics, camPosOffset, camRotOffset,
+		bool result = Simulation::Simulate(distbetweensamples, maxSamples, camPosOffset, camRotOffset,
 			physicsArgs, gravityVector, collisionDetectionFunc, collisiondepth, totaltime, linePointsVec, stats);
 
 		//Update linePointsCount with the actual number of points.
@@ -41,9 +41,7 @@ namespace hps
 		return result;
 	}
 
-	//bool Simulation::Simulate(sl::Mat depthmat, float startspeedmps, float distbetweensamples, bool applyphysics, sl::SensorsData sensordata,
-	//	int2& collisionpoint, float& collisiondepth, float& totaltime, bool drawline, cv::Mat& drawlinetomat, cv::Scalar linecolor)
-	bool Simulation::Simulate(float distbetweensamples, bool applyphysics, float3 camPosOffset, float3 camRotOffset,
+	bool Simulation::Simulate(float distbetweensamples, int maxSamples, float3 camPosOffset, float3 camRotOffset,
 		PhysicsArgs physicsArgs, float3 gravityVector, CollisionDetectionFunc collisionDetectionFunc,
 		float& collisiondepth, float& totaltime, vector<float3>& linePoints, Stats& stats)
 	{
@@ -122,7 +120,7 @@ namespace hps
 		stats.AirViscosityPaS = airviscosity;
 
 		int samplecount = 0; //Mostly for debug but also used here and there. 
-		while (currentpoint.z < MAX_DISTANCE) //Sliiiightly concerned this will be infinite. 
+		while (currentpoint.z < MAX_DISTANCE && samplecount < maxSamples) //Sliiiightly concerned this will be infinite. 
 		{
 			//Catch potential infinite loop. 
 			if (velocity.z <= 0)
@@ -142,82 +140,79 @@ namespace hps
 			float liftcoefficient = 0;
 			float liftforcenewtons = 0;
 
-			if (applyphysics)
+
+			float3 velocitynorm = velocity / speed;
+
+			//Gravity. Simplest first. 
+			velocity += gravityVector * GRAVITY_ACCEL * sampletime;
+
+			//Drag. 
+			//float dragcoefficient = CalculateDragCoefficient(spinrpm, speed / timebetweendots, bbdiameterm, airdensity, airviscosity); //Using per-sample speed. 
+			dragcoefficient = Simulation::CalculateDragCoefficient(currentSpinRPM, speed, bbdiameterm, airdensity, airviscosity);
+			dragforcenewtons = Simulation::CalculateDragForce(dragcoefficient, airdensity, crosssectionalarea, speed);
+			//cout <<"Air Density: " << airdensity <<  " Newtons: " << dragforcenewtons << endl;
+
+			float dragspeedchange = dragforcenewtons * sampletime / bbmasskg;
+
+			velocity -= velocitynorm * dragspeedchange;
+
+			//Hop-up/Magnus.
+			if (currentSpinRPM != 0) //If it's not spinning, don't spend the cycles doing all this. 
 			{
-				float3 velocitynorm = velocity / speed;
+				//Calculate hop-up normal. It's orthogonal to the velocity. 
+				//We get that by rotating around the cross product of the gun up normal and velocity by 90 degrees. 
+				//Recall that the gun up normal is the upward direction of the gun, ie the direction the backspin will push the bb. 
+				float3 hopupcross = Simulation::CrossProduct(velocity, gunupnormal);
+				//Normalize it. 
+				float hopupcrossmagnitude = sqrt(pow(hopupcross.x, 2) + pow(hopupcross.y, 2) + pow(hopupcross.z, 2));
+				hopupcross = hopupcross / hopupcrossmagnitude;
 
-				//Gravity. Simplest first. 
-				velocity += gravityVector * GRAVITY_ACCEL * sampletime;
+				float3 hopupnormal = Simulation::RotateVectorAroundAxis(velocitynorm, hopupcross, 90);
 
-				//Drag. 
-				//float dragcoefficient = CalculateDragCoefficient(spinrpm, speed / timebetweendots, bbdiameterm, airdensity, airviscosity); //Using per-sample speed. 
-				dragcoefficient = Simulation::CalculateDragCoefficient(currentSpinRPM, speed, bbdiameterm, airdensity, airviscosity);
-				dragforcenewtons = Simulation::CalculateDragForce(dragcoefficient, airdensity, crosssectionalarea, speed);
-				//cout <<"Air Density: " << airdensity <<  " Newtons: " << dragforcenewtons << endl;
+				liftcoefficient = Simulation::CalculateLiftCoefficient(currentSpinRPM, speed, bbdiameterm); //If change to speed works, apply to drag. 
+				liftforcenewtons = Simulation::CalculateLiftForce(liftcoefficient, airdensity, crosssectionalarea, speed); //Force across a second. 
+				//That force is how much force will occur over a second. 
+				float liftspeedchange = liftforcenewtons * sampletime / bbmasskg; //Speed change. 
+				velocity += hopupnormal * liftspeedchange;
 
-				float dragspeedchange = dragforcenewtons * sampletime / bbmasskg;
+				//cout << "CL: " << liftcoefficient << " H Speed Change: " << liftspeedchange << endl;
 
-				velocity -= velocitynorm * dragspeedchange;
+				//Spin decay. 
+				//Temporarily while I can't experiment at all (need equipment and lack of the plague) I'm using a 
+				//straight percentage reduction of the spin as a percentage per second. 
 
-				//Hop-up/Magnus.
-				if (currentSpinRPM != 0) //If it's not spinning, don't spend the cycles doing all this. 
+				currentSpinRPM -= currentSpinRPM * physicsArgs.BBToAirFrictionCoefficient * sampletime;
+
+				/*
+				float spindragtorque = CalculateSpinDragTorque(airdensity, airviscosity, bbdiameterm, currentSpinRPM,
+					physicsArgs.BBToAirFrictionCoefficient);
+				float dragangularaccel = spindragtorque / momentofinertia; //This is in radians per second.
+				//rad/sec to RPM: Divide by 2PI for rots/sec. Mult by 60 for rots/minute (rpm).
+				//float spindecaythissample = dragangularaccel / (2 * PI)  * 60.0 * sampletime;
+				float sampledecayradpersec = dragangularaccel * sampletime;
+				float sampledecayRPM = sampledecayradpersec / (2 * PI) * 60;
+				//int spindecaythissample = (int)round(dragangularaccel / (2 * PI)  * 60.0 * sampletime);
+				currentSpinRPM -= (int)round(sampledecayRPM);
+
+
+				if (samplecount < 1)
 				{
-					//Calculate hop-up normal. It's orthogonal to the velocity. 
-					//We get that by rotating around the cross product of the gun up normal and velocity by 90 degrees. 
-					//Recall that the gun up normal is the upward direction of the gun, ie the direction the backspin will push the bb. 
-					float3 hopupcross = Simulation::CrossProduct(velocity, gunupnormal);
-					//Normalize it. 
-					float hopupcrossmagnitude = sqrt(pow(hopupcross.x, 2) + pow(hopupcross.y, 2) + pow(hopupcross.z, 2));
-					hopupcross = hopupcross / hopupcrossmagnitude;
-
-					float3 hopupnormal = Simulation::RotateVectorAroundAxis(velocitynorm, hopupcross, 90);
-
-					liftcoefficient = Simulation::CalculateLiftCoefficient(currentSpinRPM, speed, bbdiameterm); //If change to speed works, apply to drag. 
-					liftforcenewtons = Simulation::CalculateLiftForce(liftcoefficient, airdensity, crosssectionalarea, speed); //Force across a second. 
-					//That force is how much force will occur over a second. 
-					float liftspeedchange = liftforcenewtons * sampletime / bbmasskg; //Speed change. 
-					velocity += hopupnormal * liftspeedchange;
-
-					//cout << "CL: " << liftcoefficient << " H Speed Change: " << liftspeedchange << endl;
-
-					//Spin decay. 
-					//Temporarily while I can't experiment at all (need equipment and lack of the plague) I'm using a 
-					//straight percentage reduction of the spin as a percentage per second. 
-
-					currentSpinRPM -= currentSpinRPM * physicsArgs.BBToAirFrictionCoefficient * sampletime;
-
-					/*
-					float spindragtorque = CalculateSpinDragTorque(airdensity, airviscosity, bbdiameterm, spinrpm, bbToAirFrictionCoef);
-					float dragangularaccel = spindragtorque / momentofinertia; //This is in radians per second.
-					//rad/sec to RPM: Divide by 2PI for rots/sec. Mult by 60 for rots/minute (rpm).
-					//float spindecaythissample = dragangularaccel / (2 * PI)  * 60.0 * sampletime;
-					float sampledecayradpersec = dragangularaccel * sampletime;
-					float sampledecayRPM = sampledecayradpersec / (2 * PI) * 60;
-					//int spindecaythissample = (int)round(dragangularaccel / (2 * PI)  * 60.0 * sampletime);
-					spinrpm -= (int)round(sampledecayRPM);
-
-
-					if (samplecount < 1)
-					{
-						cout << "Sample " << samplecount << " torque: " << spindragtorque << ": dragangularaccel = " << dragangularaccel <<
-							"Sample time: " << sampletime << ". Decay this sample: " << sampledecayradpersec << "rad/sec. RPM change = " << sampledecayRPM << endl;
-					}
-					*/
-
-
-					if (currentSpinRPM < 0) currentSpinRPM = 0;
-
-
+					cout << "Sample " << samplecount << " torque: " << spindragtorque << ": dragangularaccel = " << dragangularaccel <<
+						"Sample time: " << sampletime << ". Decay this sample: " << sampledecayradpersec << "rad/sec. RPM change = " << sampledecayRPM << endl;
 				}
+				*/
 
-				if (samplecount == 0)
-				{
-					stats.DragCoefficientBarrel = dragcoefficient;
-					stats.DragForceBarrel = dragforcenewtons;
-					stats.MagnusCoefficientBarrel = liftcoefficient;
-					stats.MagnusForceBarrel = liftforcenewtons;
-				}
+				if (currentSpinRPM < 0) currentSpinRPM = 0;
 
+
+			}
+
+			if (samplecount == 0)
+			{
+				stats.DragCoefficientBarrel = dragcoefficient;
+				stats.DragForceBarrel = dragforcenewtons;
+				stats.MagnusCoefficientBarrel = liftcoefficient;
+				stats.MagnusForceBarrel = liftforcenewtons;
 			}
 
 			currentpoint += velocity * sampletime;
@@ -264,33 +259,24 @@ namespace hps
 
 				//Update stats for the impact point. 
 				stats.SpeedImpact = speed;
-				if (applyphysics)
-				{
-					stats.DragCoefficientImpact = dragcoefficient;
-					stats.DragForceImpact = dragforcenewtons;
-					stats.MagnusCoefficientImpact = liftcoefficient;
-					stats.MagnusForceImpact = liftforcenewtons;
-				}
+
+				stats.DragCoefficientImpact = dragcoefficient;
+				stats.DragForceImpact = dragforcenewtons;
+				stats.MagnusCoefficientImpact = liftcoefficient;
+				stats.MagnusForceImpact = liftforcenewtons;
 
 				return true;
 			}
 
 			lastvalidpoint = currentpoint;
 			samplecount++;
-
 		}
 
 		collisiondepth = lastvalidpoint.z;
-		//cout << "Failed. Downspeed at failure: " << downspeed << endl;
-
-		//Update stats to show that they are empty. 
-		if (applyphysics)
-		{
-			stats.DragCoefficientImpact = 0;
-			stats.DragForceImpact = 0;
-			stats.MagnusCoefficientImpact = 0;
-			stats.MagnusForceImpact = 0;
-		}
+		stats.DragCoefficientImpact = 0;
+		stats.DragForceImpact = 0;
+		stats.MagnusCoefficientImpact = 0;
+		stats.MagnusForceImpact = 0;
 
 		return false; //We didn't hit anything. 
 	}

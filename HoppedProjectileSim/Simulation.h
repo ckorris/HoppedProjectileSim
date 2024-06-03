@@ -20,7 +20,7 @@ namespace hps
 
 		typedef bool(__cdecl* CollisionDetectionFunc)(const float3&, const float3&);
 
-		DLL_API bool RunSimulation(float distbetweensamples, bool applyphysics, float3 camPosOffset, float3 camRotOffset,
+		DLL_API bool RunSimulation(float distbetweensamples, int maxSamples, float3 camPosOffset, float3 camRotOffset,
 			PhysicsArgs physicsArgs, float3 gravityVector, CollisionDetectionFunc collisionDetectionFunc,
 			float& collisiondepth, float& totaltime, float3** linePoints, int& linePointsCount, Stats& stats);
 	}
@@ -31,7 +31,7 @@ namespace hps
 
 		using CollisionDetectionFunc = std::function<bool(const float3&, const float3&)>;
 
-		static bool Simulate(float distbetweensamples, bool applyphysics, float3 camPosOffset, float3 camRotOffset,
+		static bool Simulate(float distbetweensamples, int maxSamples, float3 camPosOffset, float3 camRotOffset,
 			PhysicsArgs physicsArgs, float3 gravityVector, CollisionDetectionFunc collisionDetectionFunc,
 			float& collisiondepth, float& totaltime, vector<float3>& linePoints, Stats& stats);
 
