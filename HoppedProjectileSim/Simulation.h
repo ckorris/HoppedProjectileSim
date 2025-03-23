@@ -1,6 +1,6 @@
 #pragma once
 #include "MathStructs.h"
-#include "Stats.h"
+#include "SimStats.h"
 #include "PhysicsArgs.h"
 #include <vector>
 #include <functional>
@@ -10,40 +10,43 @@ namespace hps
 {
 	using namespace std;
 
-#ifdef BUILD_DLL
-#define DLL_API __declspec(dllexport)
+#ifdef _WIN32
+	#ifdef BUILD_DLL
+		#define DLL_API __declspec(dllexport)
+	#else
+		#define DLL_API __declspec(dllimport)
+#endif
 #else
-#define DLL_API __declspec(dllimport)
+	#ifdef BUILD_DLL
+		#define DLL_API __attribute__((visibility("default")))
+	#else
+		#define DLL_API
+#endif
 #endif
 
 	extern "C" {
 
+#ifdef _WIN32
 		typedef bool(__cdecl* CollisionDetectionFunc)(const float3&, const float3&);
+#else
+		typedef bool(*CollisionDetectionFunc)(const float3&, const float3&);
+#endif
 
-		//DLL_API bool RunSimulation(float sampleTime, int maxSamples, float3 camPosOffset, float3 camRotOffset,
-		//	PhysicsArgs physicsArgs, float3 gravityVector, CollisionDetectionFunc collisionDetectionFunc,
-		//	float& collisiondepth, float& totaltime, float3** linePoints, int& linePointsCount, SampleStats** sampleStats,
-		//	Stats& stats);
-
-		DLL_API bool RunSimulationExperimental(float sampleTime, int maxSamples, float3 camPosOffset, float3 camRotOffset,
+		DLL_API bool RunSimulation(float sampleTime, int maxSamples, float3 camPosOffset, float3 camRotOffset,
 			PhysicsArgs physicsArgs, float3 gravityVector, CollisionDetectionFunc collisionDetectionFunc,
 			float& collisiondepth, float& totaltime, float3** linePoints, int& linePointsCount, SampleStats** sampleStats,
-			Stats& stats);
+			SimStats& stats);
 	}
 
-	class Simulation
+	class DLL_API Simulation
 	{
 	public:
 
 		using CollisionDetectionFunc = std::function<bool(const float3&, const float3&)>;
 
-		//static bool Simulate(float sampleTime, int maxSamples, float3 camPosOffset, float3 camRotOffset,
-		//	PhysicsArgs physicsArgs, float3 gravityVector, CollisionDetectionFunc collisionDetectionFunc,
-		//	float& collisiondepth, float& totaltime, vector<float3>& linePoints, vector<SampleStats>& sampleStats, Stats& stats);
-
-		static bool SimulateExperimental(float sampleTime, int maxSamples, float3 camPosOffset, float3 camRotOffset, PhysicsArgs
+		static bool Simulate(float sampleTime, int maxSamples, float3 camPosOffset, float3 camRotOffset, PhysicsArgs
 			physicsArgs, float3 gravityVector, CollisionDetectionFunc collisionDetectionFunc, float& collisiondepth, float& totaltime,
-			vector<float3>& linePoints, vector<SampleStats>& sampleStats, Stats& stats);
+			vector<float3>& linePoints, vector<SampleStats>& sampleStats, SimStats& stats);
 
 		static float CalculateAirDensity(float totalairpressurehpa, float tempcelsius, float relhumidity01);
 

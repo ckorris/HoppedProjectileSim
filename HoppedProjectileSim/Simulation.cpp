@@ -1,5 +1,4 @@
-﻿#include "pch.h"
-#include <math.h>
+﻿#include <math.h>
 #include "Simulation.h"
 #include "BasicMat.h"
 #include "PhysicsArgs.h"
@@ -19,15 +18,15 @@ namespace hps
 	const float PI = 3.14159265358979323846f;
 
 
-	DLL_API bool RunSimulationExperimental(float sampleTime, int maxSamples, float3 camPosOffset, float3 camRotOffset, 
+	DLL_API bool RunSimulation(float sampleTime, int maxSamples, float3 camPosOffset, float3 camRotOffset, 
 		PhysicsArgs physicsArgs, float3 gravityVector, CollisionDetectionFunc collisionDetectionFunc, 
 		float& collisiondepth, float& totaltime, float3** linePoints, int& linePointsCount, SampleStats** sampleStats,
-		Stats& stats)
+		SimStats& stats)
 	{
 		std::vector<float3> linePointsVec;
 		std::vector<SampleStats> sampleStatsVec;
 
-		bool result = Simulation::SimulateExperimental(sampleTime, maxSamples, camPosOffset, camRotOffset,
+		bool result = Simulation::Simulate(sampleTime, maxSamples, camPosOffset, camRotOffset,
 			physicsArgs, gravityVector, collisionDetectionFunc, collisiondepth, totaltime, linePointsVec, sampleStatsVec, stats);
 
 		//Update linePointsCount with the actual number of points.
@@ -44,9 +43,9 @@ namespace hps
 		return result;
 	}
 
-	bool Simulation::SimulateExperimental(float sampleTime, int maxSamples, float3 camPosOffset, float3 camRotOffset, PhysicsArgs 
+	bool Simulation::Simulate(float sampleTime, int maxSamples, float3 camPosOffset, float3 camRotOffset, PhysicsArgs 
 		physicsArgs, float3 gravityVector, CollisionDetectionFunc collisionDetectionFunc, float& collisiondepth, float& totaltime, 
-		vector<float3>& linePoints, vector<SampleStats>& sampleStats, Stats& stats)
+		vector<float3>& linePoints, vector<SampleStats>& sampleStats, SimStats& stats)
 	{
 		float downspeed = 0;
 		totaltime = 0;
@@ -150,10 +149,16 @@ namespace hps
 				hopupcross = hopupcross / hopupcrossmagnitude;
 				sampleStat.HopUpCross = hopupcross;
 
+				//TODO: The nor
+
 				float3 hopupnormal = Simulation::RotateVectorAroundAxis(velocitynorm, hopupcross, 90);
 				sampleStat.HopUpNormal = hopupnormal;
 
 				liftcoefficient = Simulation::CalculateLiftCoefficient(currentSpinRPM, speed, bbdiameterm); //If change to speed works, apply to drag. 
+
+				//TEST
+				liftcoefficient = -liftcoefficient;
+
 				liftforcenewtons = Simulation::CalculateLiftForce(liftcoefficient, airdensity, crosssectionalarea, speed); //Force across a second. 
 				//That force is how much force will occur over a second. 
 				float liftspeedchange = liftforcenewtons * sampleTime / bbmasskg; //Speed change. 
